@@ -1,0 +1,14 @@
+{
+  "name": "k6-load-tests",
+  "version": "1.0.0",
+  "description": "Testes de carga com K6 — JSONPlaceholder API",
+  "scripts": {
+    "smoke":         "k6 run tests/smoke-test.js",
+    "load":          "k6 run tests/load-test.js",
+    "load:report":   "k6 run --out json=reports/results.json tests/load-test.js",
+    "stress":        "k6 run tests/stress-test.js",
+    "report":        "node scripts/generate-report.js",
+    "run:all":       "npm run smoke && npm run load:report && npm run report"
+  },
+  "devDependencies": {}
+}
