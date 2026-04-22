@@ -1,18 +1,13 @@
 name: CI/CD Pipeline — API + E2E + Mobile
 
-# ─────────────────────────────────────────────────────────────
-# GATILHOS
-# ─────────────────────────────────────────────────────────────
 on:
   push:
     branches: [main, develop, "feature/**", "fix/**"]
   pull_request:
     branches: [main, develop]
   schedule:
-    # Roda todos os dias às 06:00 UTC (03:00 BRT) — smoke test noturno
     - cron: "0 6 * * *"
   workflow_dispatch:
-    # Permite execução manual com parâmetros
     inputs:
       test_suite:
         description: "Qual suite rodar?"
@@ -27,20 +22,14 @@ on:
         type: choice
         options: [staging, production]
 
-# ─────────────────────────────────────────────────────────────
-# VARIÁVEIS GLOBAIS
-# ─────────────────────────────────────────────────────────────
 env:
   NODE_VERSION: "20"
   JAVA_VERSION: "17"
 
-# ─────────────────────────────────────────────────────────────
-# JOBS
-# ─────────────────────────────────────────────────────────────
 jobs:
 
   # ══════════════════════════════════════════════════════════
-  # JOB 1 — VALIDAÇÃO INICIAL (roda primeiro, bloqueia o resto)
+  # JOB 1 — VALIDAÇÃO INICIAL
   # ══════════════════════════════════════════════════════════
   validate:
     name: "🔍 Validação e Lint"
@@ -63,20 +52,16 @@ jobs:
           find . -name "*.spec.js" | head -20
           echo "=== Verificação concluída ==="
 
-      - name: Validar sintaxe dos arquivos de configuração
-        run: |
-          node -e "require('./api-tests/playwright.config.js')" 2>/dev/null && echo "✅ API config OK" || echo "⚠ API config não encontrado"
-          node -e "require('./e2e-tests/cucumber.js')" 2>/dev/null && echo "✅ E2E config OK" || echo "⚠ E2E config não encontrado"
-
   # ══════════════════════════════════════════════════════════
   # JOB 2 — TESTES DE API
+  # Testes de API fazem apenas requisições HTTP — SEM browser
+  # Removido: playwright install (economiza ~8 min)
   # ══════════════════════════════════════════════════════════
   api-tests:
     name: "🔌 Testes de API"
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     needs: validate
-    # Roda se: suite = all ou api, ou se é push/PR
     if: |
       github.event.inputs.test_suite == 'all' ||
       github.event.inputs.test_suite == 'api'  ||
@@ -102,22 +87,22 @@ jobs:
         working-directory: api-tests
         run: npm install
 
-      - name: Instalar Playwright (API — sem browser)
-        working-directory: api-tests
-        run: npx playwright install --with-deps
+      # ✅ SEM playwright install — API usa apenas http do Node
+      # O @playwright/test é usado só como test runner (assertions)
+      # Não precisa de Chromium, Firefox ou WebKit
 
       - name: Criar diretório de relatórios
         run: mkdir -p api-tests/reports
 
       - name: "▶ Rodar testes de API"
         working-directory: api-tests
-        run: npm run test:list
+        run: npx playwright test --reporter=list
         continue-on-error: true
 
-      - name: Gerar relatório HTML
+      - name: Gerar relatório JSON
         if: always()
         working-directory: api-tests
-        run: npx playwright test --reporter=html
+        run: npx playwright test --reporter=json 2>/dev/null || true
         continue-on-error: true
 
       - name: Upload relatório de API
@@ -125,31 +110,29 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: api-test-report-${{ github.run_number }}
-          path: |
-            api-tests/reports/
-            api-tests/playwright-report/
+          path: api-tests/reports/
           retention-days: 30
 
-      - name: Publicar resultado no PR
+      - name: Comentar resultado no PR
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const conclusion = '${{ job.status }}';
-            const icon = conclusion === 'success' ? '✅' : '❌';
+            const status = '${{ job.status }}';
+            const icon   = status === 'success' ? '✅' : '❌';
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `## ${icon} Testes de API — ${{ github.run_number }}\n**Status:** ${conclusion}\n**Branch:** ${{ github.ref_name }}\n**Commit:** ${{ github.sha }}\n\n> Relatório disponível nos artifacts da execução.`
+              body: `## ${icon} Testes de API — Run #${{ github.run_number }}\n**Status:** ${status}\n**Branch:** ${{ github.ref_name }}\n\n> Relatório disponível nos artifacts da execução.`
             });
 
   # ══════════════════════════════════════════════════════════
   # JOB 3 — TESTES E2E
+  # E2E precisa de browser — instala apenas Chromium
   # ══════════════════════════════════════════════════════════
   e2e-tests:
-    name: "🌐 Testes E2E (Cucumber + Playwright)"
+    name: "🌐 Testes E2E — ${{ matrix.suite }}"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: validate
@@ -159,10 +142,9 @@ jobs:
       github.event_name != 'workflow_dispatch'
 
     strategy:
-      # Roda login e checkout em paralelo
       matrix:
         suite: [login, checkout]
-      fail-fast: false  # Continua mesmo se uma suite falhar
+      fail-fast: false
 
     steps:
       - name: Checkout código
@@ -184,13 +166,13 @@ jobs:
         working-directory: e2e-tests
         run: npm install
 
-      - name: Instalar Playwright browsers
+      # ✅ Apenas Chromium — reduz de ~8 min para ~2 min
+      - name: Instalar Chromium
         working-directory: e2e-tests
         run: npx playwright install chromium --with-deps
 
       - name: Criar diretórios de relatório
-        run: |
-          mkdir -p e2e-tests/reports/screenshots
+        run: mkdir -p e2e-tests/reports/screenshots
 
       - name: "▶ Rodar suite — ${{ matrix.suite }}"
         working-directory: e2e-tests
@@ -210,89 +192,33 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-report-${{ matrix.suite }}-${{ github.run_number }}
-          path: |
-            e2e-tests/reports/
+          path: e2e-tests/reports/
           retention-days: 30
 
   # ══════════════════════════════════════════════════════════
-  # JOB 4 — TESTES MOBILE (Appium + Android Emulator)
+  # JOB 4 — TESTES MOBILE
+  # NOTA: Emulador Android não é suportado de forma estável
+  # no GitHub Actions (exit code 224 — falta de hardware
+  # virtualization nos runners gratuitos).
+  # Este job está desabilitado no pipeline automático.
+  # Use o workflow separado mobile-tests.yml manualmente
+  # ou em runners self-hosted com KVM habilitado.
   # ══════════════════════════════════════════════════════════
   mobile-tests:
     name: "📱 Testes Mobile (Appium)"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     needs: validate
-    if: |
-      github.event.inputs.test_suite == 'all'    ||
-      github.event.inputs.test_suite == 'mobile' ||
-      github.event_name == 'schedule'            ||
-      github.ref == 'refs/heads/main'
+    # ✅ Desabilitado: emulador Android requer KVM (não disponível
+    # em runners gratuitos do GitHub). Usar workflow separado.
+    if: false
 
     steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
-
-      - name: Instalar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Instalar Java (Appium requer JDK)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Instalar Android SDK e Emulador
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          target: google_apis
-          arch: x86_64
-          profile: Nexus 6
-          # Appium roda dentro deste contexto
-          script: |
-            echo "✅ Emulador Android iniciado"
-            adb devices
-            # Aguardar emulador estar completamente pronto
-            adb wait-for-device
-            adb shell input keyevent 82
-
-      - name: Instalar Appium Server
+      - name: Mobile tests desabilitados no pipeline automático
         run: |
-          npm install -g appium@2.x
-          appium driver install uiautomator2
-          appium driver list --installed
-
-      - name: Iniciar Appium Server em background
-        run: |
-          appium --port 4723 --log appium.log &
-          sleep 5
-          echo "✅ Appium rodando na porta 4723"
-
-      - name: Instalar dependências dos testes mobile
-        working-directory: mobile-tests
-        run: npm install
-
-      - name: "▶ Rodar testes mobile"
-        working-directory: mobile-tests
-        run: npm test
-        env:
-          APPIUM_HOST: localhost
-          APPIUM_PORT: 4723
-          PLATFORM: android
-          APP_PACKAGE: com.saucelabs.mydemoapp.android
-        continue-on-error: true
-
-      - name: Upload logs do Appium
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: appium-logs-${{ github.run_number }}
-          path: |
-            appium.log
-            mobile-tests/reports/
-          retention-days: 30
+          echo "⚠️  Testes mobile requerem runner self-hosted com KVM."
+          echo "Execute o workflow mobile-tests.yml manualmente."
+          echo "Documentação: https://github.com/reactivecircus/android-emulator-runner"
 
   # ══════════════════════════════════════════════════════════
   # JOB 5 — RELATÓRIO CONSOLIDADO
@@ -301,11 +227,16 @@ jobs:
     name: "📊 Relatório Consolidado"
     runs-on: ubuntu-latest
     needs: [api-tests, e2e-tests, mobile-tests]
-    if: always()  # Roda mesmo se jobs anteriores falharem
+    if: always()
 
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Baixar todos os artifacts
         uses: actions/download-artifact@v4
@@ -313,55 +244,35 @@ jobs:
           path: all-reports
           pattern: "*-${{ github.run_number }}"
 
-      - name: Instalar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
       - name: Gerar relatório consolidado
         run: |
           node -e "
-          const fs = require('fs');
-          const path = require('path');
+          const fs  = require('fs');
+          const api    = '${{ needs.api-tests.result }}';
+          const e2e    = '${{ needs.e2e-tests.result }}';
+          const mobile = '${{ needs.mobile-tests.result }}';
+          const icon   = s => s === 'success' ? '✅' : s === 'skipped' ? '⏭' : '❌';
+          const now    = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+          const ok     = [api, e2e, mobile].every(s => ['success','skipped'].includes(s));
 
-          const apiStatus    = '${{ needs.api-tests.result }}';
-          const e2eStatus    = '${{ needs.e2e-tests.result }}';
-          const mobileStatus = '${{ needs.mobile-tests.result }}';
+          const report = \`# 📊 Relatório CI/CD — Run #${{ github.run_number }}
 
-          const icon = s => s === 'success' ? '✅' : s === 'skipped' ? '⏭' : '❌';
-          const now  = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-          const report = \`# 📊 Relatório CI/CD — Execução #${{ github.run_number }}
-
-          ## Informações da Execução
           | Campo | Valor |
           |-------|-------|
           | **Repositório** | ${{ github.repository }} |
           | **Branch** | ${{ github.ref_name }} |
           | **Commit** | \\\`${{ github.sha }}\\\` |
           | **Autor** | ${{ github.actor }} |
-          | **Gatilho** | ${{ github.event_name }} |
-          | **Data/Hora** | \${now} (BRT) |
-          | **Run ID** | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+          | **Data/Hora** | \${now} BRT |
 
           ## Resultado por Suite
+          | Suite | Status |
+          |-------|--------|
+          | \${icon(api)} Testes de API | \${api} |
+          | \${icon(e2e)} Testes E2E | \${e2e} |
+          | \${icon(mobile)} Testes Mobile | \${mobile} |
 
-          | Suite | Status | Detalhes |
-          |-------|--------|----------|
-          | \${icon(apiStatus)} **Testes de API** | \${apiStatus} | JSONPlaceholder — 63 testes |
-          | \${icon(e2eStatus)} **Testes E2E** | \${e2eStatus} | Login + Checkout — 24 cenários |
-          | \${icon(mobileStatus)} **Testes Mobile** | \${mobileStatus} | Android — Appium |
-
-          ## Status Geral
-          \${[apiStatus, e2eStatus, mobileStatus].every(s => s === 'success' || s === 'skipped')
-            ? '### ✅ PIPELINE PASSOU — Todos os testes executados com sucesso'
-            : '### ❌ PIPELINE FALHOU — Verificar relatórios individuais nos artifacts'}
-
-          ## Artifacts Disponíveis
-          - \`api-test-report-${{ github.run_number }}\` — Relatório HTML dos testes de API
-          - \`e2e-report-login-${{ github.run_number }}\` — Relatório E2E suite Login
-          - \`e2e-report-checkout-${{ github.run_number }}\` — Relatório E2E suite Checkout
-          - \`appium-logs-${{ github.run_number }}\` — Logs do Appium + relatório mobile
+          \${ok ? '### ✅ PIPELINE PASSOU' : '### ❌ PIPELINE FALHOU — Verificar artifacts'}
           \`;
 
           fs.mkdirSync('consolidated', { recursive: true });
@@ -376,7 +287,7 @@ jobs:
           path: consolidated/
           retention-days: 90
 
-      - name: Comentar no PR com relatório final
+      - name: Comentar relatório no PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
@@ -390,7 +301,7 @@ jobs:
               body: report
             });
 
-      - name: Falhar pipeline se algum teste crítico falhou
+      - name: Bloquear merge se testes críticos falharam
         if: |
           needs.api-tests.result == 'failure' ||
           needs.e2e-tests.result == 'failure'
