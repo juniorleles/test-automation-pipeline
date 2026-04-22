@@ -1,0 +1,5 @@
+node_modules/ 
+e2e-tests/reports/ 
+api-tests/reports/ 
+e2e-tests/node_modules/ 
+api-tests/node_modules/ 

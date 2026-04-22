@@ -1,0 +1,27 @@
+{
+  "name": "e2e-tests-cucumber-playwright",
+  "version": "1.0.0",
+  "description": "Testes E2E com Cucumber + Playwright — Login e Checkout",
+  "scripts": {
+    "test": "cucumber-js",
+    "test:login": "cucumber-js --profile login",
+    "test:checkout": "cucumber-js --profile checkout",
+    "test:positivo": "cucumber-js --tags @positivo",
+    "test:negativo": "cucumber-js --tags @negativo",
+    "test:smoke": "cucumber-js --tags @smoke",
+    "test:headed": "cross-env HEADLESS=false cucumber-js",
+    "test:headed:login": "cross-env HEADLESS=false cucumber-js --profile login",
+    "test:headed:checkout": "cross-env HEADLESS=false cucumber-js --profile checkout",
+    "report:html": "node scripts/generate-report.js"
+  },
+  "dependencies": {
+    "@cucumber/cucumber": "^10.3.2",
+    "@playwright/test": "^1.44.0",
+    "playwright": "^1.44.0",
+    "multiple-cucumber-html-reporter": "^3.6.2",
+    "cross-env": "^7.0.3"
+  },
+  "devDependencies": {
+    "@cucumber/pretty-formatter": "^1.0.1"
+  }
+}
