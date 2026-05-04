@@ -1,0 +1,79 @@
+name: Load Tests — K6
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 5 * * 1"   # Segunda-feira às 02h BRT
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: "Tipo de teste"
+        required: true
+        default: "load"
+        type: choice
+        options: [smoke, load, stress]
+
+jobs:
+  k6-load-test:
+    name: "⚡ K6 — ${{ github.event.inputs.test_type || 'load' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Instalar K6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+          k6 version
+
+      - name: Instalar Node.js (para relatório)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Criar diretório de relatórios
+        run: mkdir -p k6-load-tests/reports
+
+      - name: "▶ Smoke test (validação prévia)"
+        working-directory: k6-load-tests
+        run: k6 run tests/smoke-test.js
+        continue-on-error: true
+
+      - name: "▶ Teste de carga — 500 VUs / 5 min"
+        if: github.event.inputs.test_type != 'smoke'
+        working-directory: k6-load-tests
+        run: k6 run --out json=reports/results.json tests/load-test.js
+        continue-on-error: true
+
+      - name: "▶ Stress test"
+        if: github.event.inputs.test_type == 'stress'
+        working-directory: k6-load-tests
+        run: k6 run tests/stress-test.js
+        continue-on-error: true
+
+      - name: Gerar relatório HTML
+        if: always()
+        working-directory: k6-load-tests
+        run: node scripts/generate-report.js
+        continue-on-error: true
+
+      - name: Upload relatório K6
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-report-${{ github.run_number }}
+          path: |
+            k6-load-tests/reports/load-test-report.html
+            k6-load-tests/reports/results.json
+          retention-days: 30
